@@ -1,0 +1,161 @@
+{%- comment -%}
+  Shopify Liquid Grab — https://github.com/jaszlix/shopify-liquid-grab
+  Built on React Grab by Aiden Bai (https://github.com/aidenybai/react-grab, MIT).
+
+  Point at any element in your local Shopify preview and hand it to a coding agent together
+  with the Liquid file, JSON template and section it comes from.
+
+  Loads ONLY on http://127.0.0.1 / http://localhost (i.e. `shopify theme dev`). It never runs in
+  the theme editor and never for real visitors, so it is safe to leave in a published theme.
+
+  - Turn on selection: React Grab toolbar button or Alt+C (Option+C on macOS)
+  - Click an element  -> a note box opens; type and press Enter (or the arrow)
+  - Hover + Ctrl/⌘+C  -> copy instantly, no note
+  - If the React Grab MCP server runs on localhost:4723, every grab is also sent to it.
+
+  Tip: add data-grab-source="sections/my-section.liquid" to a section's root element to name its
+  file exactly. Without it, the section key and its JSON file are reported for lookup.
+{%- endcomment -%}
+{%- unless request.design_mode -%}
+<script>
+(function () {
+  var host = location.hostname;
+  if (host !== '127.0.0.1' && host !== 'localhost') return;
+  if (window.__liquidGrabLoaded) return;
+  window.__liquidGrabLoaded = true;
+
+  var REACT_GRAB_URL = 'https://unpkg.com/react-grab@0.2.0/dist/index.global.js';
+  var MCP_URL = 'http://localhost:4723';
+  var TEMPLATE = {{ template | json }};
+  var TEMPLATE_FILE = 'templates/' + {{ template.name | json }} + ({{ template.suffix | json }} ? '.' + {{ template.suffix | json }} : '') + '.json';
+  var LAYOUT_FILE = 'layout/theme.liquid';
+
+  // ---------------------------------------------------------------- Shopify context
+  var toArray = function (list) { return Array.prototype.slice.call(list || []); };
+
+  var sectionInfo = function (el) {
+    var wrap = el.closest && el.closest('.shopify-section');
+    if (!wrap) return null;
+    var id = wrap.id.replace(/^shopify-section-/, '');
+    var key = id.split('__').pop();
+    var groupClass = toArray(wrap.classList).find(function (c) { return c.indexOf('shopify-section-group-') === 0; });
+    var group = groupClass ? groupClass.replace('shopify-section-group-', '') : null;
+    var tagged = el.closest('[data-grab-source]');
+    if (!tagged || !wrap.contains(tagged)) tagged = wrap.querySelector('[data-grab-source]');
+    return { wrap: wrap, key: key, group: group, source: tagged ? tagged.getAttribute('data-grab-source') : null };
+  };
+
+  var blockInfo = function (el) {
+    var b = el.closest && el.closest('[data-shopify-editor-block], [data-block-id], [id^="Block-"]');
+    if (!b) return null;
+    var raw = b.getAttribute('data-shopify-editor-block');
+    if (raw) { try { var j = JSON.parse(raw); return j.id + (j.type ? ' (' + j.type + ')' : ''); } catch (e) {} }
+    return b.getAttribute('data-block-id') || b.id;
+  };
+
+  var cssPath = function (el, stopAt) {
+    var parts = [];
+    while (el && el.nodeType === 1 && el !== stopAt && parts.length < 6) {
+      var p = el.tagName.toLowerCase();
+      var cls = toArray(el.classList).filter(function (c) { return !/^(is-|js-)/.test(c); }).slice(0, 2);
+      if (el.id && !/^shopify-section/.test(el.id)) p += '#' + el.id;
+      else if (cls.length) p += '.' + cls.join('.');
+      parts.unshift(p);
+      el = el.parentElement;
+    }
+    return parts.join(' > ');
+  };
+
+  var describe = function (el) {
+    var s = sectionInfo(el);
+    var lines = ['page: ' + location.pathname + location.search, 'template: ' + TEMPLATE + ' (' + TEMPLATE_FILE + ')'];
+    if (s) {
+      var json = s.group ? 'sections/' + s.group + '.json' : TEMPLATE_FILE;
+      lines.push('section: "' + s.key + '" in ' + json);
+      lines.push('section file: ' + (s.source || 'see the "type" of "' + s.key + '" in ' + json + ' -> sections/<type>.liquid'));
+      lines.push('dom path: ' + cssPath(el, s.wrap));
+    } else {
+      lines.push('section: none (' + LAYOUT_FILE + ' or a snippet rendered there)');
+      lines.push('dom path: ' + cssPath(el, document.body));
+    }
+    var blk = blockInfo(el);
+    if (blk) lines.push('block: ' + blk);
+    return lines.join('\n');
+  };
+
+  var shopifyContext = function (elements) {
+    var seen = {};
+    return '[Shopify theme context]\n' + elements.map(describe)
+      .filter(function (d) { if (seen[d]) return false; seen[d] = 1; return true; })
+      .map(function (d, i, all) { return (all.length > 1 ? '#' + (i + 1) + ' ' : '') + d; })
+      .join('\n\n');
+  };
+
+  // ---------------------------------------------------------------- MCP forwarding (optional)
+  var mcpReady = fetch(MCP_URL + '/health', { signal: AbortSignal.timeout ? AbortSignal.timeout(1000) : undefined })
+    .then(function (r) { return r.ok; }).catch(function () { return false; });
+  var sendToMcp = function (content, prompt) {
+    mcpReady.then(function (ok) {
+      if (!ok) return;
+      fetch(MCP_URL + '/context', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ content: content, prompt: prompt })
+      }).catch(function () {});
+    });
+  };
+
+  // ---------------------------------------------------------------- React Grab plugin
+  var plugin = {
+    name: 'shopify-liquid-grab',
+    hooks: {
+      // Clicking an element opens the note box by default.
+      onActivate: function () {
+        var api = window.__REACT_GRAB__;
+        if (!api || typeof api.comment !== 'function') return;
+        setTimeout(function () {
+          var st = api.getState ? api.getState() : null;
+          if (st && (st.isPromptMode || st.isCopying)) return;
+          api.comment();
+        }, 0);
+      },
+      transformCopyContent: function (content, elements) {
+        return content + '\n\n' + shopifyContext(elements);
+      },
+      onCopySuccess: function (_elements, content) { sendToMcp([content]); },
+      transformAgentContext: function (context, elements) {
+        var next = Object.assign({}, context, { content: context.content.concat(shopifyContext(elements)) });
+        sendToMcp(next.content, next.prompt);
+        return next;
+      }
+    }
+  };
+
+  var attach = function (api) {
+    if (!api || typeof api.registerPlugin !== 'function' || api.__liquidGrab) return;
+    api.registerPlugin(plugin);
+    api.__liquidGrab = true;
+    var mac = /Mac/.test(navigator.platform);
+    console.info('[Shopify Liquid Grab] ready. ' + (mac ? 'Option+C' : 'Alt+C') + ' then click an element to add a note, or hover + ' + (mac ? '⌘C' : 'Ctrl+C') + ' to copy.');
+  };
+  window.addEventListener('react-grab:init', function (e) { attach(e.detail); });
+
+  // Alt+C / Option+C toggles selection mode.
+  document.addEventListener('keydown', function (e) {
+    if (!e.altKey || e.ctrlKey || e.metaKey || e.code !== 'KeyC') return;
+    var t = e.target;
+    if (t && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName))) return;
+    var api = window.__REACT_GRAB__;
+    if (!api || typeof api.activate !== 'function') return;
+    e.preventDefault();
+    if (api.isActive && api.isActive()) api.deactivate(); else api.activate();
+  }, true);
+
+  var s = document.createElement('script');
+  s.src = REACT_GRAB_URL;
+  s.crossOrigin = 'anonymous';
+  s.onload = function () { attach(window.__REACT_GRAB__); };
+  document.head.appendChild(s);
+})();
+</script>
+{%- endunless -%}

@@ -1,0 +1,36 @@
+{
+  "name": "shopify-liquid-grab",
+  "version": "1.0.0",
+  "description": "Point at any element in your local Shopify theme preview and hand it to your coding agent with its Liquid section, template and file. Built on React Grab.",
+  "bin": {
+    "shopify-liquid-grab": "bin/cli.js"
+  },
+  "files": [
+    "bin",
+    "snippets",
+    "README.md",
+    "LICENSE"
+  ],
+  "keywords": [
+    "shopify",
+    "liquid",
+    "theme",
+    "react-grab",
+    "ai",
+    "agent",
+    "claude",
+    "cursor",
+    "mcp"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/jaszlix/shopify-liquid-grab.git"
+  },
+  "homepage": "https://github.com/jaszlix/shopify-liquid-grab#readme",
+  "bugs": "https://github.com/jaszlix/shopify-liquid-grab/issues",
+  "author": "jaszlix",
+  "license": "MIT",
+  "engines": {
+    "node": ">=16"
+  }
+}
